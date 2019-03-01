@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 import {writeFileSync} from 'fs';
-import {gzip as zlibGzip, gzipSync} from 'zlib';
+import {gzipSync} from 'zlib';
 
 import {perftools} from '../../proto/profile';
 
 import * as heapProfiler from './heap-profiler';
-import * as encode from './profile-encoder';
 import * as timeProfiler from './time-profiler';
 
 export {encode} from './profile-encoder';

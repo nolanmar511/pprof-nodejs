@@ -1,9 +1,9 @@
 {
-  "name": "",
+  "name": "busybench",
   "version": "0.0.0",
   "description": "",
-  "main": "build/src/index.js",
-  "types": "build/src/index.d.ts",
+  "main": "build/src/busybench.js",
+  "types": "build/src/busybench.d.ts",
   "files": [
     "build/src"
   ],
