@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 import {writeFileSync} from 'fs';
-import {gzipSync} from 'zlib';
+import {gzip as zlibGzip, gzipSync} from 'zlib';
 
 import {perftools} from '../../proto/profile';
 
 import * as heapProfiler from './heap-profiler';
+import * as encode from './profile-encoder';
 import * as timeProfiler from './time-profiler';
 
+export {encode} from './profile-encoder';
 export {SourceMapper} from './sourcemapper/sourcemapper';
 
 export const time = {
