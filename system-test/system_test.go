@@ -65,7 +65,8 @@ NODEDIR=$(dirname $(dirname $(which node)))
 # Build and pack pprof module.
 cd {{.PprofDir}}
 
-# TODO: remove this workaround.
+# TODO: remove this workaround when a new version of nan is released (current
+# version of nan is 2.12.1).
 # For v8-canary tests, we need to use the version of NAN on github, which 
 # contains unreleased fixes that allow the native component to be compiled
 # with Node's V8 canary build.
@@ -201,8 +202,8 @@ func TestAgentIntegration(t *testing.T) {
 	}
 }
 
-func checkProfile(profilePath string, wantProfile profileSummary) error {
-	f, err := os.Open(profilePath)
+func checkProfile(path string, want profileSummary) error {
+	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("failed to open profile: %v", err)
 	}
@@ -214,10 +215,10 @@ func checkProfile(profilePath string, wantProfile profileSummary) error {
 
 	for _, loc := range pr.Location {
 		for _, line := range loc.Line {
-			if wantProfile.functionName == line.Function.Name && strings.HasSuffix(line.Function.Filename, wantProfile.sourceFile) {
+			if want.functionName == line.Function.Name && strings.HasSuffix(line.Function.Filename, want.sourceFile) {
 				return nil
 			}
 		}
 	}
-	return fmt.Errorf("Location (function: %s, file: %s) not found in profiles of type %s", wantProfile.functionName, wantProfile.sourceFile, wantProfile.profileType)
+	return fmt.Errorf("Location (function: %s, file: %s) not found in profiles of type %s", want.functionName, want.sourceFile, want.profileType)
 }
