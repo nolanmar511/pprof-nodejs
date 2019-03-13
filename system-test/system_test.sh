@@ -34,7 +34,12 @@ DOCKERFILE="$BASE_DIR/system-test/docker/Dockerfile"
 # Run test.
 cd "$TESTDIR"
 retry go get -t -d .
-go test -v -timeout=10m -run TestAgentIntegration -pprof_nodejs_path="$BASE_DIR" -run_only_v8_canary_test="$RUN_ONLY_V8_CANARY_TEST" -binary_host="$BINARY_HOST" -dockerfile="$DOCKERFILE"
 
-# Remove directory where test was run.
-rm -r $TESTDIR
+RUN_ON="alpine-docker"
+go test -timeout=10m -run TestAgentIntegration -pprof_nodejs_path="$BASE_DIR" -run_only_v8_canary_test="$RUN_ONLY_V8_CANARY_TEST" -binary_host="$BINARY_HOST" -run_on="$RUN_ON"
+
+RUN_ON="linux-docker"
+go test -timeout=10m -run TestAgentIntegration -pprof_nodejs_path="$BASE_DIR" -run_only_v8_canary_test="$RUN_ONLY_V8_CANARY_TEST" -binary_host="$BINARY_HOST" -run_on="$RUN_ON"
+
+RUN_ON="local"
+go test -timeout=10m -run TestAgentIntegration -pprof_nodejs_path="$BASE_DIR" -run_only_v8_canary_test="$RUN_ONLY_V8_CANARY_TEST" -binary_host="$BINARY_HOST" -run_on="$RUN_ON"
