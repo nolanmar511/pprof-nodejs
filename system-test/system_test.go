@@ -33,6 +33,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/google/pprof/profile"
 )
@@ -49,6 +50,10 @@ var (
 const alpineDocker = `FROM node:10-alpine
 RUN apk add --no-cache python curl bash build-base`
 
+const linuxDocker = `FROM node:10
+RUN apt-get update
+RUN apt-get install -y curl build-essential`
+
 var tmpl = template.Must(template.New("benchTemplate").Parse(`
 #! /bin/bash
 (
@@ -64,7 +69,7 @@ retry() {
 set -x
 
 # Note directory from which test is being run.
-BASE_DIR=$(pwd)
+BASE_DIR={{.PprofDir}}
 
 # Install desired version of Node.JS.
 # nvm install writes to stderr and stdout on successful install, so both are
@@ -76,6 +81,8 @@ NODEDIR=$(dirname $(dirname $(which node)))
 
 # Build and pack pprof module.
 cd {{.PprofDir}}
+
+ls
 
 # TODO: remove this workaround when a new version of nan (current version 
 #       2.12.1) is released.
@@ -92,9 +99,9 @@ VERSION=$(node -e "console.log(require('./package.json').version);")
 PROFILER="{{.PprofDir}}/pprof-$VERSION.tgz"
 
 # Create and set up directory for running benchmark.
-TESTDIR="$BASE_DIR/{{.Name}}"
+TESTDIR="$BASE_DIR/run-system-test/{{.Name}}"
 mkdir -p "$TESTDIR"
-cp -r "$BASE_DIR/busybench" "$TESTDIR"
+cp -r "$BASE_DIR/system-test/busybench" "$TESTDIR"
 cd "$TESTDIR/busybench"
 
 retry npm install pify @types/pify typescript gts @types/node >/dev/null
@@ -105,6 +112,9 @@ npm run compile >/dev/null
 # Run benchmark, which will collect and save profiles.
 node -v
 node --trace-warnings build/src/busybench.js {{.DurationSec}}
+
+pwd
+ls
 
 # Write all output standard out with timestamp.
 ) 2>&1 | while read line; do echo "$(date): ${line}"; done >&1
@@ -200,7 +210,7 @@ func TestAgentIntegration(t *testing.T) {
 		if cli, err = client.NewClientWithOpts(client.WithVersion("1.37")); err != nil {
 			t.Fatalf("failed to create docker client: %v", err)
 		}
-		buildCtx, err := getDockerfileToTar(alpineDocker)
+		buildCtx, err := getDockerfileToTar(linuxDocker)
 		if err != nil {
 			t.Fatalf("failed to get docker build context: %v", err)
 		}
@@ -237,22 +247,35 @@ func TestAgentIntegration(t *testing.T) {
 				}
 			} else {
 
-				pwd, err := os.Getwd()
-				if err != nil {
-					t.Fatalf("failed to get workind directory: %v", err)
-				}
+				/*
+					pwd, err := os.Getwd()
+					if err != nil {
+						t.Fatalf("failed to get workind directory: %v", err)
+					}
+				*/
 				benchPath, err := filepath.Abs(bench)
 				if err != nil {
 					t.Fatalf("failed to get absolute path of %s: %v", benchPath, err)
 				}
+				fmt.Printf("BENCH PATH: %s\v", benchPath)
 
-				resp, err := cli.ContainerCreate(ctx, &container.Config{
-					Image: "test-image",
-					Cmd:   []string{"/bin/bash"},
-					// Cmd:     []string{"ls", pwd, "-R"},
-					Tty:     true,
-					Volumes: map[string]struct{}{fmt.Sprintf("%s:%s", pwd, pwd): {}},
-				}, nil, nil, "")
+				resp, err := cli.ContainerCreate(ctx,
+					&container.Config{
+						Image: "test-image",
+						Cmd:   []string{"/bin/bash", benchPath},
+						// Cmd:     []string{"ls", "usr/local/google/home/nolanmar/pprof-nodejs", "-R"},
+						Tty:     true,
+						Volumes: map[string]struct{}{fmt.Sprintf("%q:%q", *pprofDir, *pprofDir): {}},
+					},
+					&container.HostConfig{
+						Mounts: []mount.Mount{
+							{
+								Type:   mount.TypeBind,
+								Source: *pprofDir,
+								Target: *pprofDir,
+							},
+						},
+					}, nil, "")
 				if err != nil {
 					t.Fatalf("failed to created docker container: %v", err)
 				}
@@ -262,13 +285,6 @@ func TestAgentIntegration(t *testing.T) {
 					t.Fatalf("failed to start container: %v", err)
 				}
 				fmt.Printf("Started container: %v\n", resp)
-
-				out, err := cli.ContainerLogs(ctx, resp.ID, types.ContainerLogsOptions{ShowStdout: true})
-				if err != nil {
-					t.Fatalf("failed to get container logs: %v", err)
-				}
-				fmt.Println("Container logs")
-				io.Copy(os.Stdout, out)
 
 				statusCh, errCh := cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
 
@@ -282,6 +298,13 @@ func TestAgentIntegration(t *testing.T) {
 				}
 
 				fmt.Println("Finished waiting for container")
+
+				out, err := cli.ContainerLogs(ctx, resp.ID, types.ContainerLogsOptions{ShowStdout: true})
+				if err != nil {
+					t.Fatalf("failed to get container logs: %v", err)
+				}
+				fmt.Println("Container logs")
+				io.Copy(os.Stdout, out)
 
 			}
 
