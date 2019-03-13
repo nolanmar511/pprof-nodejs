@@ -15,28 +15,39 @@
 package testing
 
 import (
+	"archive/tar"
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"text/template"
 	"time"
 
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/google/pprof/profile"
 )
 
 var (
 	binaryHost          = flag.String("binary_host", "", "host from which to download precompiled binaries; if no value is specified, binaries will be built from source.")
+	dockerfile          = flag.String("dockerfile", "", "path to docker file; if unspecified, system test won't be run in docker.")
 	runOnlyV8CanaryTest = flag.Bool("run_only_v8_canary_test", false, "if true test will be run only with the v8-canary build, otherwise, no tests will be run with v8 canary build")
 	pprofDir            = flag.String("pprof_nodejs_path", "", "path to directory containing pprof-nodejs module")
 
 	runID = strings.Replace(time.Now().Format("2006-01-02-15-04-05.000000-0700"), ".", "-", -1)
 )
+
+const alpineDocker = `FROM node:10-alpine
+RUN apk add --no-cache python curl bash build-base`
 
 var tmpl = template.Must(template.New("benchTemplate").Parse(`
 #! /bin/bash
@@ -152,21 +163,23 @@ func TestAgentIntegration(t *testing.T) {
 			wantProfiles: wantProfiles,
 			nodeVersion:  "6",
 		},
-		{
-			name:         fmt.Sprintf("pprof-node8-%s", runID),
-			wantProfiles: wantProfiles,
-			nodeVersion:  "8",
-		},
-		{
-			name:         fmt.Sprintf("pprof-node10-%s", runID),
-			wantProfiles: wantProfiles,
-			nodeVersion:  "10",
-		},
-		{
-			name:         fmt.Sprintf("pprof-node11-%s", runID),
-			wantProfiles: wantProfiles,
-			nodeVersion:  "11",
-		},
+		/*
+			{
+				name:         fmt.Sprintf("pprof-node8-%s", runID),
+				wantProfiles: wantProfiles,
+				nodeVersion:  "8",
+			},
+			{
+				name:         fmt.Sprintf("pprof-node10-%s", runID),
+				wantProfiles: wantProfiles,
+				nodeVersion:  "10",
+			},
+			{
+				name:         fmt.Sprintf("pprof-node11-%s", runID),
+				wantProfiles: wantProfiles,
+				nodeVersion:  "11",
+			},
+		*/
 	}
 	if *runOnlyV8CanaryTest {
 		testcases = []pprofTestCase{{
@@ -180,6 +193,27 @@ func TestAgentIntegration(t *testing.T) {
 	// Prevent test cases from running in parallel.
 	runtime.GOMAXPROCS(1)
 
+	var cli *client.Client
+	ctx := context.Background()
+	if *dockerfile != "" {
+		var err error
+		if cli, err = client.NewClientWithOpts(client.WithVersion("1.37")); err != nil {
+			t.Fatalf("failed to create docker client: %v", err)
+		}
+		buildCtx, err := getDockerfileToTar(alpineDocker)
+		if err != nil {
+			t.Fatalf("failed to get docker build context: %v", err)
+		}
+		imgRsp, err := cli.ImageBuild(ctx, buildCtx, types.ImageBuildOptions{
+			Tags: []string{"test-image"},
+		})
+		if err != nil {
+			t.Fatalf("failed to build docker image: %v", err)
+		}
+		io.Copy(os.Stdout, imgRsp.Body)
+		defer imgRsp.Body.Close()
+	}
+
 	for _, tc := range testcases {
 		tc := tc // capture range variable
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,13 +222,67 @@ func TestAgentIntegration(t *testing.T) {
 				t.Fatalf("failed to initialize bench script: %v", err)
 			}
 
-			cmd := exec.Command("/bin/bash", bench)
-			var testOut bytes.Buffer
-			cmd.Stdout = &testOut
-			err = cmd.Run()
-			t.Log(testOut.String())
 			if err != nil {
-				t.Fatalf("failed to execute benchmark: %v", err)
+				t.Fatalf("failed to build docker image: %v", err)
+			}
+
+			if *dockerfile == "" {
+				cmd := exec.Command("/bin/bash", bench)
+				var testOut bytes.Buffer
+				cmd.Stdout = &testOut
+				err = cmd.Run()
+				t.Log(testOut.String())
+				if err != nil {
+					t.Fatalf("failed to execute benchmark: %v", err)
+				}
+			} else {
+
+				pwd, err := os.Getwd()
+				if err != nil {
+					t.Fatalf("failed to get workind directory: %v", err)
+				}
+				benchPath, err := filepath.Abs(bench)
+				if err != nil {
+					t.Fatalf("failed to get absolute path of %s: %v", benchPath, err)
+				}
+
+				resp, err := cli.ContainerCreate(ctx, &container.Config{
+					Image: "test-image",
+					Cmd:   []string{"/bin/bash"},
+					// Cmd:     []string{"ls", pwd, "-R"},
+					Tty:     true,
+					Volumes: map[string]struct{}{fmt.Sprintf("%s:%s", pwd, pwd): {}},
+				}, nil, nil, "")
+				if err != nil {
+					t.Fatalf("failed to created docker container: %v", err)
+				}
+				fmt.Printf("Created container: %v\n", resp)
+
+				if err := cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+					t.Fatalf("failed to start container: %v", err)
+				}
+				fmt.Printf("Started container: %v\n", resp)
+
+				out, err := cli.ContainerLogs(ctx, resp.ID, types.ContainerLogsOptions{ShowStdout: true})
+				if err != nil {
+					t.Fatalf("failed to get container logs: %v", err)
+				}
+				fmt.Println("Container logs")
+				io.Copy(os.Stdout, out)
+
+				statusCh, errCh := cli.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+
+				fmt.Println("Waiting for container")
+				select {
+				case err := <-errCh:
+					if err != nil {
+						t.Fatalf("failed to wait for container: %v", err)
+					}
+				case <-statusCh:
+				}
+
+				fmt.Println("Finished waiting for container")
+
 			}
 
 			for _, wantProfile := range tc.wantProfiles {
@@ -205,6 +293,34 @@ func TestAgentIntegration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func getDockerfileToTar(dockerfile string) (io.Reader, error) {
+	/*
+		r, err := os.Open(dockerfile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open docker file %s: %v", dockerfile, err)
+		}
+		f, err := ioutil.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read docker file %s: %v", dockerfile, err)
+		}
+	*/
+
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	defer w.Close()
+
+	fmt.Println(dockerfile)
+
+	if err := w.WriteHeader(&tar.Header{Name: "Dockerfile", Size: int64(len(dockerfile))}); err != nil {
+		return nil, fmt.Errorf("failed to write tar header: %v", err)
+	}
+	if _, err := w.Write([]byte(dockerfile)); err != nil {
+		return nil, fmt.Errorf("failed to write dockerfile to tar: %v", err)
+	}
+
+	return bytes.NewReader(buf.Bytes()), nil
 }
 
 func checkProfile(path string, want profileSummary) error {
