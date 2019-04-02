@@ -90,7 +90,6 @@ NAN_METHOD(GetAllocationProfile) {
   info.GetReturnValue().Set(TranslateAllocationProfile(root));
 }
 
-
 // Time profiler
 
 #if NODE_MODULE_VERSION > NODE_8_0_MODULE_VERSION
@@ -101,37 +100,120 @@ CpuProfiler* cpuProfiler = CpuProfiler::New(v8::Isolate::GetCurrent());
 CpuProfiler* cpuProfiler = v8::Isolate::GetCurrent()->GetCpuProfiler();
 #endif
 
+Local<Object> CreateTimeNode(auto name, auto scriptName, auto scriptId,
+                         auto lineNumber, auto columnNumber,
+                         auto hitCount, Local<Array> children) {
+  Local<Object> js_node = Nan::New<Object>();
+  js_node->Set(Nan::New<String>("name").ToLocalChecked(), name);
+  js_node->Set(Nan::New<String>("scriptName").ToLocalChecked(), scriptName);
+  js_node->Set(Nan::New<String>("scriptId").ToLocalChecked(), scriptId);
+  js_node->Set(Nan::New<String>("lineNumber").ToLocalChecked(), lineNumber);
+  js_node->Set(Nan::New<String>("columnNumber").ToLocalChecked(), columnNumber);
+  js_node->Set(Nan::New<String>("hitCount").ToLocalChecked(), hitCount);
+  js_node->Set(Nan::New<String>("children").ToLocalChecked(), children);
+  return js_node;
+}
+
+Local<Value> TranslateLineNumbersTimeProfileNode(const CpuProfileNode* parent,
+                                      const CpuProfileNode* node) {
+  auto name = parent->GetFunctionName();
+  auto scriptName = parent->GetScriptResourceName();
+  auto scriptId = Nan::New<Integer>(parent->GetScriptId());
+  // auto lineNumber = Nan::New<Integer>(node->GetLineNumber());
+  // auto columnNumber = Nan::New<Integer>(node->GetColumnNumber());
+  unsigned int hitLineCount = node->GetHitLineCount();
+
+  unsigned int index = 0;
+  Local<Array> children;
+  int32_t count = node->GetChildrenCount();
+
+  // Add nodes corresponding to lines within the node's function.
+  std::vector<CpuProfileNode::LineTick> entries(hitLineCount);
+  if (node->GetLineTicks(&entries[0], hitLineCount)) {
+    children = Nan::New<Array>(count + entries.size());
+
+    for (const CpuProfileNode::LineTick entry : entries) {
+      children->Set(index++, CreateTimeNode(
+        name,
+        scriptName,
+        scriptId,
+        Nan::New<Integer>(entry.line),
+        Nan::New<Integer>(0),
+        Nan::New<Integer>(entry.hit_count),
+        Nan::New<Array>(0)
+      ));
+    }
+  } else {
+    children = Nan::New<Array>(count);
+  }
+
+  for (int32_t i = 0; i < count; i++) {
+    children->Set(index++, TranslateLineNumbersTimeProfileNode(node,
+        node->GetChild(i)));
+  };
+
+  return CreateTimeNode(name, scriptName, scriptId,
+                    Nan::New<Integer>(node->GetLineNumber()),
+                    Nan::New<Integer>(node->GetColumnNumber()),
+                    Nan::New<Integer>(hitLineCount), children);
+}
+
+Local<Value> TranslateLineNumbersTimeProfileRoot(const CpuProfileNode* node) {
+  int32_t count = node->GetChildrenCount();
+  Local<Array> children = Nan::New<Array>(count);
+  for (int32_t i = 0; i < count; i++) {
+    children->Set(i, TranslateLineNumbersTimeProfileNode(node,
+        node->GetChild(i)));
+  }
+
+  return  CreateTimeNode(
+      node->GetFunctionName(),
+      node->GetScriptResourceName(),
+      Nan::New<Integer>(node->GetScriptId()),
+      Nan::New<Integer>(node->GetLineNumber()),
+      Nan::New<Integer>(node->GetColumnNumber()),
+      Nan::New<Integer>(node->GetHitLineCount()),
+      children
+  );
+}
 
 Local<Value> TranslateTimeProfileNode(const CpuProfileNode* node) {
-  Local<Object> js_node = Nan::New<Object>();
-  js_node->Set(Nan::New<String>("name").ToLocalChecked(),
-    node->GetFunctionName());
-  js_node->Set(Nan::New<String>("scriptName").ToLocalChecked(),
-    node->GetScriptResourceName());
-  js_node->Set(Nan::New<String>("scriptId").ToLocalChecked(),
-    Nan::New<Integer>(node->GetScriptId()));
-  js_node->Set(Nan::New<String>("lineNumber").ToLocalChecked(),
-    Nan::New<Integer>(node->GetLineNumber()));
-  js_node->Set(Nan::New<String>("columnNumber").ToLocalChecked(),
-    Nan::New<Integer>(node->GetColumnNumber()));
-  js_node->Set(Nan::New<String>("hitCount").ToLocalChecked(),
-    Nan::New<Integer>(node->GetHitCount()));
   int32_t count = node->GetChildrenCount();
   Local<Array> children = Nan::New<Array>(count);
   for (int32_t i = 0; i < count; i++) {
     children->Set(i, TranslateTimeProfileNode(node->GetChild(i)));
   }
-  js_node->Set(Nan::New<String>("children").ToLocalChecked(),
-    children);
-  return js_node;
+
+  return  CreateTimeNode(
+    node->GetFunctionName(),
+    node->GetScriptResourceName(),
+    Nan::New<Integer>(node->GetScriptId()),
+    Nan::New<Integer>(node->GetLineNumber()),
+    Nan::New<Integer>(node->GetColumnNumber()),
+    Nan::New<Integer>(node->GetHitLineCount()),
+    children
+  );
 }
 
-Local<Value> TranslateTimeProfile(const CpuProfile* profile) {
+Local<Value> TranslateTimeProfile(const CpuProfile* profile, bool hasDetailedLines) {
   Local<Object> js_profile = Nan::New<Object>();
   js_profile->Set(Nan::New<String>("title").ToLocalChecked(),
     profile->GetTitle());
-  js_profile->Set(Nan::New<String>("topDownRoot").ToLocalChecked(),
+#if NODE_MODULE_VERSION > NODE_10_0_MODULE_VERSION
+  if (hasDetailedLines) {
+    js_profile->Set(
+      Nan::New<String>("topDownRoot").ToLocalChecked(),
+      TranslateLineNumbersTimeProfileRoot(profile->GetTopDownRoot()));
+  } else {
+    js_profile->Set(
+      Nan::New<String>("topDownRoot").ToLocalChecked(),
+      TranslateTimeProfileNode(profile->GetTopDownRoot()));
+  }
+#else
+  js_profile->Set(
+    Nan::New<String>("topDownRoot").ToLocalChecked(),
     TranslateTimeProfileNode(profile->GetTopDownRoot()));
+#endif
   js_profile->Set(Nan::New<String>("startTime").ToLocalChecked(),
     Nan::New<Number>(profile->GetStartTime()));
   js_profile->Set(Nan::New<String>("endTime").ToLocalChecked(),
@@ -140,18 +222,54 @@ Local<Value> TranslateTimeProfile(const CpuProfile* profile) {
 }
 
 NAN_METHOD(StartProfiling) {
-  Local<String> name = info[0].As<String>();
+  if (info.Length() != 2) {
+    return Nan::ThrowTypeError("StartProfling must have two arguments.");
+  }
+  if (!info[0]->IsString()) {
+    return Nan::ThrowTypeError("First argument type must be a string.");
+  }
+  if (!info[1]->IsBoolean()) {
+    return Nan::ThrowTypeError("First argument type must be a boolean.");
+  }
 
-  // Sample counts and timestamps are not used, so we do not need to record
-  // samples.
+  Local<String> name =
+      Nan::MaybeLocal<String>(info[0].As<String>()).ToLocalChecked();
+
+// Sample counts and timestamps are not used, so we do not need to record
+// samples.
+#if NODE_MODULE_VERSION > NODE_10_0_MODULE_VERSION
+  bool includeLineInfo =
+      Nan::MaybeLocal<Boolean>(info[1].As<Boolean>()).ToLocalChecked()->Value();
+  if (includeLineInfo) {
+    cpuProfiler->StartProfiling(name, CpuProfilingMode::kCallerLineNumbers,
+                                false);
+  } else {
+    cpuProfiler->StartProfiling(name, false);
+  }
+#else
   cpuProfiler->StartProfiling(name, false);
+#endif
 }
 
+// stopProfiling(runName: string, includedLineInfo?: boolean): TimeProfile
 NAN_METHOD(StopProfiling) {
-  Local<String> name = info[0].As<String>();
-  CpuProfile* profile =
-    cpuProfiler->StopProfiling(name);
-  Local<Value> translated_profile = TranslateTimeProfile(profile);
+  if (info.Length() != 2) {
+    return Nan::ThrowTypeError("StopProfling must have two arguments.");
+  }
+  if (!info[0]->IsString()) {
+    return Nan::ThrowTypeError("First argument type must be a string.");
+  }
+  if (!info[1]->IsBoolean()) {
+    return Nan::ThrowTypeError("First argument type must be a boolean.");
+  }
+  Local<String> name =
+      Nan::MaybeLocal<String>(info[0].As<String>()).ToLocalChecked();
+  bool includedLineInfo =
+      Nan::MaybeLocal<Boolean>(info[1].As<Boolean>()).ToLocalChecked()->Value();
+
+  CpuProfile* profile = cpuProfiler->StopProfiling(name);
+  Local<Value> translated_profile =
+      TranslateTimeProfile(profile, includedLineInfo);
   profile->Delete();
   info.GetReturnValue().Set(translated_profile);
 }
@@ -187,3 +305,4 @@ NAN_MODULE_INIT(InitAll) {
 }
 
 NODE_MODULE(google_cloud_profiler, InitAll);
+

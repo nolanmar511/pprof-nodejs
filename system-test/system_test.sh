@@ -24,14 +24,23 @@ else
 fi
 
 for i in ${NODE_VERSIONS[@]}; do
+
   # Test Linux support for the given node version.
   retry docker build -f Dockerfile.linux --build-arg NODE_VERSION=$i \
       --build-arg ADDITIONAL_PACKAGES="$ADDITIONAL_PACKAGES" \
       --build-arg  NVM_NODEJS_ORG_MIRROR="$NVM_NODEJS_ORG_MIRROR" \
       -t node$i-linux .
 
-  docker run  -v $PWD/..:/src -e BINARY_HOST="$BINARY_HOST" node$i-linux \
+  docker run  -v $PWD/..:/src -e BINARY_HOST="$BINARY_HOST" \
+      node$i-linux /src/system-test/test.sh
+
+  # Test support for accurate line numbers with node versions supporting this
+  # feature.
+  if [ "$i" != "6" ] && [ "$i" != "8" ]; then
+  docker run  -v $PWD/..:/src -e BINARY_HOST="$BINARY_HOST" \
+      -e VERIFY_TIME_LINE_NUMBERS="true" node$i-linux \
       /src/system-test/test.sh
+  fi
 
   # Skip running on alpine if NVM_NODEJS_ORG_MIRROR is specified.
   if [[ ! -z "$NVM_NODEJS_ORG_MIRROR" ]]; then

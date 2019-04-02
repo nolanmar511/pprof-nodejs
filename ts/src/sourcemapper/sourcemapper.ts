@@ -126,7 +126,7 @@ export class SourceMapper {
   /**
    * @param {Array.<string>} sourceMapPaths An array of paths to .map source map
    *  files that should be processed.  The paths should be relative to the
-   *  current process's current working directory
+   *  current process's current working directory.
    * @param {Logger} logger A logger that reports errors that occurred while
    *  processing the given source map files
    * @constructor
@@ -196,7 +196,10 @@ export class SourceMapper {
       return location;
     }
 
-    const generatedPos = {line: location.line, column: location.column};
+    const generatedPos = {
+      line: location.line,
+      column: location.column,
+    };
 
     // TODO: Determine how to remove the explicit cast here.
     const consumer: sourceMap.SourceMapConsumer =
@@ -206,12 +209,14 @@ export class SourceMapper {
     if (pos.source === null) {
       return location;
     }
-    return {
+
+    const out = {
       file: path.resolve(entry.mapFileDir, pos.source),
       line: pos.line || undefined,
       name: pos.name || location.name,
       column: pos.column || undefined,
     };
+    return out;
   }
 }
 
