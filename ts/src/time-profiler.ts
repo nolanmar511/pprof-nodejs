@@ -71,6 +71,7 @@ export function start(
 
   profiling = true;
   const runName = name || `pprof-${Date.now()}-${Math.random()}`;
+  console.log('Setting sampling interval');
   setSamplingInterval(intervalMicros);
   // Node.js contains an undocumented API for reporting idle status to V8.
   // This lets the profiler distinguish idle time from time spent in native
@@ -78,14 +79,20 @@ export function start(
   // undocumented API.
   // See https://github.com/nodejs/node/issues/19009#issuecomment-403161559.
   // tslint:disable-next-line no-any
+  console.log('Ensure idle time reported to V8');
   (process as any)._startProfilerIdleNotifier();
+  console.log('Starting profile collection');
   startProfiling(runName, lineNumbers);
   return function stop() {
     profiling = false;
+    console.log('Stopping profile collection');
     const result = stopProfiling(runName, lineNumbers);
+    console.log('Stop reporting idle time to V8');
     // tslint:disable-next-line no-any
     (process as any)._stopProfilerIdleNotifier();
+    console.log('Serialize profile');
     const profile = serializeTimeProfile(result, intervalMicros, sourceMapper);
+    console.log('Finished profile serialization');
     return profile;
   };
 }
